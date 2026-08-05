@@ -25,7 +25,7 @@ import webbrowser
 
 API_BASE = os.environ.get("WITHECHO_API_BASE", "https://api.withecho.cn")
 CLIENT_ID = os.environ.get("WITHECHO_CLIENT_ID", "01KZ811QEVV9ZYBQM3NXYXQT8Z")
-SCOPES = "profile daily:read diary:read muse:read"
+SCOPES = "profile daily:read diary:read muse:read task:read reminder:read"
 CRED_PATH = os.path.expanduser("~/.withecho/credentials.json")
 LOGIN_TIMEOUT = 300  # 等待浏览器回调的秒数
 REFRESH_AHEAD = 300  # access_token 剩余不足 5 分钟即提前刷新

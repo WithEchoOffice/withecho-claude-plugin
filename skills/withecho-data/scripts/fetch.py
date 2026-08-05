@@ -3,9 +3,14 @@
 
   python fetch.py daily [--limit N] [--cursor C] [--all]
   python fetch.py daily-detail --event-id ID
+  python fetch.py digest --date YYYY-MM-DD
+  python fetch.py search --q 关键词 [--limit N]
   python fetch.py diary [--from YYYY-MM-DD --to YYYY-MM-DD | --limit N --cursor C]
   python fetch.py diary-detail --diary-id ID
   python fetch.py muse [--limit N] [--cursor C] [--all]
+  python fetch.py tasks [--status S] [--limit N] [--cursor C] [--all]
+  python fetch.py task-detail --task-id ID
+  python fetch.py reminders [--status S] [--limit N] [--cursor C] [--all]
 
 401 自动刷新令牌重试一次；仍失败则提示重新登录。
 """
@@ -47,13 +52,15 @@ def get(path: str, params: dict, _retried=False) -> dict:
         raise auth.die("network_error", str(e.reason))
 
 
-def paged(path: str, list_key: str, limit: int, cursor: str, fetch_all: bool) -> dict:
+def paged(path: str, list_key: str, limit: int, cursor: str, fetch_all: bool,
+          extra: dict = None) -> dict:
     """游标翻页；fetch_all 时聚合所有页到一个列表。"""
+    extra = extra or {}
     if not fetch_all:
-        return get(path, {"limit": limit, "cursor": cursor})
+        return get(path, {"limit": limit, "cursor": cursor, **extra})
     items, pages = [], 0
     while pages < MAX_PAGES:
-        resp = get(path, {"limit": 50, "cursor": cursor})
+        resp = get(path, {"limit": 50, "cursor": cursor, **extra})
         items.extend(resp.get(list_key, []))
         cursor = resp.get("next_cursor", "")
         pages += 1
@@ -79,6 +86,13 @@ def main():
     dd = sub.add_parser("daily-detail", help="事件详情（正文+洞察卡片）")
     dd.add_argument("--event-id", required=True)
 
+    dg = sub.add_parser("digest", help="单日聚合：事件+日记正文+碎碎念")
+    dg.add_argument("--date", required=True, metavar="YYYY-MM-DD")
+
+    se = sub.add_parser("search", help="跨域检索（洞察卡片/日记/任务）")
+    se.add_argument("--q", required=True, help="关键词，1-100 字符")
+    se.add_argument("--limit", type=int, default=10, help="每段条数，最大 20")
+
     diary = sub.add_parser("diary", help="日记列表")
     diary.add_argument("--from", dest="date_from", default="", metavar="YYYY-MM-DD")
     diary.add_argument("--to", dest="date_to", default="", metavar="YYYY-MM-DD")
@@ -93,12 +107,33 @@ def main():
     muse.add_argument("--cursor", default="")
     muse.add_argument("--all", action="store_true", help="自动翻页拉全部")
 
+    tasks = sub.add_parser("tasks", help="研究任务列表")
+    tasks.add_argument("--status", default="",
+                       help="proposed/confirmed/running/completed/failed/cancelled，空为全部")
+    tasks.add_argument("--limit", type=int, default=20)
+    tasks.add_argument("--cursor", default="")
+    tasks.add_argument("--all", action="store_true", help="自动翻页拉全部")
+
+    tk = sub.add_parser("task-detail", help="任务详情（含 Markdown 交付物全文）")
+    tk.add_argument("--task-id", required=True)
+
+    rem = sub.add_parser("reminders", help="提醒列表（默认只看生效中的）")
+    rem.add_argument("--status", default="",
+                     help="默认 active；可传 proposed/triggered/cancelled/expired 或 all")
+    rem.add_argument("--limit", type=int, default=20)
+    rem.add_argument("--cursor", default="")
+    rem.add_argument("--all", action="store_true", help="自动翻页拉全部")
+
     args = p.parse_args()
 
     if args.cmd == "daily":
         emit(paged("/open/daily", "events", args.limit, args.cursor, args.all))
     elif args.cmd == "daily-detail":
         emit(get("/open/daily/detail", {"event_id": args.event_id}))
+    elif args.cmd == "digest":
+        emit(get("/open/digest", {"date": args.date}))
+    elif args.cmd == "search":
+        emit(get("/open/search", {"q": args.q, "limit": args.limit}))
     elif args.cmd == "diary":
         if args.date_from or args.date_to:
             emit(get("/open/diaries", {"from": args.date_from, "to": args.date_to}))
@@ -108,6 +143,14 @@ def main():
         emit(get("/open/diaries/detail", {"diary_id": args.diary_id}))
     elif args.cmd == "muse":
         emit(paged("/open/muses", "muses", args.limit, args.cursor, args.all))
+    elif args.cmd == "tasks":
+        emit(paged("/open/tasks", "tasks", args.limit, args.cursor, args.all,
+                   extra={"status": args.status}))
+    elif args.cmd == "task-detail":
+        emit(get("/open/tasks/detail", {"task_id": args.task_id}))
+    elif args.cmd == "reminders":
+        emit(paged("/open/reminders", "reminders", args.limit, args.cursor, args.all,
+                   extra={"status": args.status}))
 
 
 if __name__ == "__main__":

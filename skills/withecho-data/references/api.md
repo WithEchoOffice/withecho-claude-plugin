@@ -6,10 +6,43 @@
 
 ## 分页通用规则
 
-- `limit` 默认 20，最大 50
+- `limit` 默认 20，最大 50（search 例外：每段默认 10，最大 20）
 - 列表按时间新→旧返回；响应 `next_cursor` 非空时，作为下一次请求的 `cursor`
   参数向更早翻页，为空即到底
 - `cursor` 是不透明串，原样回传，不要解析
+
+## GET /open/search?q= — 跨域检索（搜索面 = 已授权 scope）
+
+参数：`q`（必填，1-100 字符）、`limit`（每段条数，默认 10，最大 20）
+
+```json
+{
+  "daily":   [{ "event_id": "01J...", "tag": "工作", "title": "…", "summary": "…" }],
+  "diaries": [{ "diary_id": "01J...", "date": "2026-08-04", "title": "…", "summary": "…" }],
+  "tasks":   [{ "task_id": "01J...", "title": "…", "result_title": "…", "result_summary": "…", "completed_at": "…" }]
+}
+```
+
+- 段为 `null` = 未授权对应 scope（daily→`daily:read`、diaries→`diary:read`、tasks→`task:read`）；
+  `[]` = 已授权但无命中
+- 只回 id + 标题 + 摘要；正文走 `/open/daily/detail`、`/open/diaries/detail`、`/open/tasks/detail`
+- 碎碎念不在搜索面内（正文短，直接翻 `/open/muses`）
+
+## GET /open/digest?date= — 单日聚合
+
+参数：`date`（必填，`YYYY-MM-DD`）。一次取齐当天事件 + 日记（含正文）+ 碎碎念：
+
+```json
+{
+  "date": "2026-08-04",
+  "events": [{ "event_id": "…", "title": "…", "summary": "…", "tags": ["…"], "date": "…", "start_time": "…", "end_time": "…" }],
+  "diary": { "diary_id": "…", "date": "…", "title": "…", "summary": "…", "content": "…markdown…" },
+  "muses": [{ "muse_id": "…", "event_id": "…", "content": "…markdown…", "created_at": "…" }]
+}
+```
+
+- `events`/`muses` 为 `null` = 未授权；`[]` = 当日无数据。`diary` 为 `null` = 未授权或当日无日记
+- 事件正文与洞察卡片走 `/open/daily/detail?event_id=`
 
 ## GET /open/daily — 日常事件列表（scope: daily:read）
 
@@ -59,7 +92,8 @@
 
 ## GET /open/muses — 碎碎念列表（scope: muse:read）
 
-参数：`limit`、`cursor`。列表直接带正文，无详情接口。
+碎碎念是 Echo 的内心独白（看到用户日常后有感而发），不是用户本人写的内容，
+解读和转述时注意视角。参数：`limit`、`cursor`。列表直接带正文，无详情接口。
 
 ```json
 {
@@ -72,6 +106,51 @@
 ```
 
 `event_id` 关联日常事件，可用 `/open/daily/detail` 查看来源事件（需 `daily:read`）。
+
+## GET /open/tasks — 研究任务列表（scope: task:read）
+
+参数：`limit`、`cursor`、`status`（可选：proposed/confirmed/running/completed/failed/cancelled）
+
+```json
+{
+  "tasks": [{
+    "task_id": "01J...", "event_id": "01J...",
+    "title": "…", "description": "…", "status": "completed",
+    "result_title": "…", "result_summary": "…",
+    "created_at": "…", "completed_at": "…"
+  }],
+  "next_cursor": ""
+}
+```
+
+`event_id` 非空 = 来自日常事件；为空 = 来自对话。
+
+## GET /open/tasks/detail?task_id= — 任务详情（scope: task:read）
+
+列表字段之外多一项 `result_md`：Markdown 交付物全文（未完成为空）。
+
+## GET /open/reminders — 提醒列表（scope: reminder:read）
+
+参数：`limit`、`cursor`、`status`（默认 `active`；可传 proposed/triggered/cancelled/expired 或 `all`）
+
+```json
+{
+  "reminders": [{
+    "reminder_id": "01J...", "event_id": "01J...",
+    "title": "…", "description": "…",
+    "type": "once",
+    "trigger_rule": { "datetime": "2026-08-10T09:00:00+08:00" },
+    "status": "active",
+    "next_trigger_at": "2026-08-10T01:00:00Z",
+    "created_at": "…"
+  }],
+  "next_cursor": ""
+}
+```
+
+- `type=once`：`trigger_rule.datetime` 为 ISO 8601（保留用户语境时区）
+- `type=recurring`：`trigger_rule.rrule` 为 iCal RRULE，另有 `last_triggered_at`
+- 可直接生成 .ics 或写入日历工具
 
 ## 错误
 

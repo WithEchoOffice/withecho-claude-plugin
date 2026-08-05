@@ -1,7 +1,8 @@
 # WithEcho Claude Code Plugin
 
-让 AI 编程助手经你授权后读取你 WithEcho 账号的**日常、日记、碎碎念**数据，
-用于总结、检索、分析（OAuth 2.0 授权码 + PKCE，只读，无任何写接口）。
+让 AI 编程助手经你授权后读取你 WithEcho 账号的**日常、日记、碎碎念、研究任务、
+提醒**数据，用于总结、检索、分析、同步日历
+（OAuth 2.0 授权码 + PKCE，只读，无任何写接口）。
 
 技能遵循开放的 [Agent Skills 标准](https://agentskills.io)（SKILL.md）：
 除 Claude Code 外，也可用于 Codex、Cursor、opencode、CodeBuddy、pi 等任何
@@ -26,8 +27,11 @@
 装完直接对 Claude 说人话即可，skill 会自动触发：
 
 - 「帮我总结一下上周的日记」
-- 「看看我最近的碎碎念，有什么情绪变化」
+- 「看看 Echo 最近的碎碎念都在想什么」
 - 「我 7 月 27 号那天的日常记录了什么」
+- 「搜一下我关于装修的记录」
+- 「把我 Echo 里的提醒同步到系统日历」
+- 「我那个调研任务的结果导出成文件」
 
 **首次使用**会自动弹出浏览器完成 WithEcho 授权（手机号 + 短信验证码）。
 之后令牌自动刷新，30 天内活跃无需重新登录。
@@ -82,7 +86,7 @@ Codex、Cursor、opencode、pi 都会读取 `~/.agents/skills/`，装一次多�
 skills/withecho-data/
 ├── SKILL.md                   # 技能入口（Claude 按 description 自动触发）
 ├── scripts/auth.py            # OAuth 登录/刷新/登出（Python 3 标准库）
-├── scripts/fetch.py           # 拉取 daily / diary / muse 数据
+├── scripts/fetch.py           # 拉取 daily/diary/muse/tasks/reminders + search/digest
 └── references/api.md          # 开放接口字段速查
 ```
 
