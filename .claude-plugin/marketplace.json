@@ -1,0 +1,11 @@
+{
+  "name": "withecho",
+  "owner": { "name": "WithEcho" },
+  "plugins": [
+    {
+      "name": "withecho",
+      "source": "./",
+      "description": "用 WithEcho 账号授权，读取你的日常、日记、碎碎念数据"
+    }
+  ]
+}
