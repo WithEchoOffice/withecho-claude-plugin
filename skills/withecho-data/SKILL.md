@@ -1,4 +1,5 @@
 ---
+name: withecho-data
 description: 读取用户 WithEcho（Echo）账号的日常、日记、碎碎念数据。当用户要求查看、总结、搜索或分析自己的 Echo 日常记录、日记或碎碎念时使用。首次使用需引导用户完成 WithEcho 浏览器授权。
 ---
 

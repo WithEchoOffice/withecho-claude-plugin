@@ -1,9 +1,13 @@
 # WithEcho Claude Code Plugin
 
-让 Claude Code 经你授权后读取你 WithEcho 账号的**日常、日记、碎碎念**数据，
+让 AI 编程助手经你授权后读取你 WithEcho 账号的**日常、日记、碎碎念**数据，
 用于总结、检索、分析（OAuth 2.0 授权码 + PKCE，只读，无任何写接口）。
 
-## 安装
+技能遵循开放的 [Agent Skills 标准](https://agentskills.io)（SKILL.md）：
+除 Claude Code 外，也可用于 Codex、Cursor、opencode、CodeBuddy、pi 等任何
+支持该标准的 agent，见[在其他 Agent 中使用](#在其他-agent-中使用)。
+
+## 在 Claude Code 中安装
 
 在 Claude Code 里执行：
 
@@ -34,6 +38,42 @@
 | 卸载插件 | `/plugin uninstall withecho` |
 | 退出登录 / 解绑 | 对 Claude 说「退出 WithEcho 登录」 |
 | 撤销授权 | WithEcho App「设置 → 授权管理」，撤销后令牌立即失效 |
+
+## 在其他 Agent 中使用
+
+`skills/withecho-data/` 目录就是一个标准 skill，可不加修改地用于任何支持
+[Agent Skills 标准](https://agentskills.io)的 agent。前提同上：有 `git` 和 `python3`。
+
+**方式一（推荐）：通用 skills CLI 一键安装**（需要 Node.js）：
+
+```
+npx skills add https://github.com/WithEchoOffice/withecho-claude-plugin -g
+```
+
+它会自动检测本机装了哪些 agent（Codex、Cursor、opencode、CodeBuddy、iFlow CLI、
+Qwen Code、Trae、Kimi Code CLI、pi、Cline、Roo Code 等 70+ 种）并提示选择。
+
+**方式二：手动复制**，装进跨工具共享目录 `~/.agents/skills/`：
+
+```
+git clone https://github.com/WithEchoOffice/withecho-claude-plugin
+cp -r withecho-claude-plugin/skills/withecho-data ~/.agents/skills/
+```
+
+Codex、Cursor、opencode、pi 都会读取 `~/.agents/skills/`，装一次多个 agent 同时生效。
+如果目标 agent 不读该目录，拷到它自己的技能目录即可：
+
+| Agent | 用户级技能目录 | 项目级技能目录 |
+|-------|--------------|--------------|
+| OpenAI Codex | `~/.agents/skills/` | `.agents/skills/` |
+| Cursor | `~/.cursor/skills/`（也读 `~/.claude/skills/`） | `.cursor/skills/` |
+| opencode | `~/.config/opencode/skills/`（也读 `~/.claude/skills/`） | `.opencode/skills/` |
+| CodeBuddy | `~/.codebuddy/skills/` | `.codebuddy/skills/` |
+| pi | `~/.pi/agent/skills/` | `.pi/skills/` |
+
+装好后用法与 Claude Code 相同，直接说人话触发（Codex 里也可用 `$withecho-data`
+显式调用）。令牌统一存在 `~/.withecho/credentials.json`，**所有 agent 共享登录态，
+在任意一个里授权过即可**。
 
 ## 目录结构
 
