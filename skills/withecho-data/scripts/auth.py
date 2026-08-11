@@ -11,6 +11,7 @@
 """
 
 import base64
+import contextlib
 import hashlib
 import http.server
 import json
@@ -27,6 +28,7 @@ API_BASE = os.environ.get("WITHECHO_API_BASE", "https://api.withecho.cn")
 CLIENT_ID = os.environ.get("WITHECHO_CLIENT_ID", "01KZ811QEVV9ZYBQM3NXYXQT8Z")
 SCOPES = "profile daily:read diary:read muse:read task:read reminder:read"
 CRED_PATH = os.path.expanduser("~/.withecho/credentials.json")
+CRED_LOCK_PATH = CRED_PATH + ".lock"
 LOGIN_TIMEOUT = 300  # 等待浏览器回调的秒数
 REFRESH_AHEAD = 300  # access_token 剩余不足 5 分钟即提前刷新
 
@@ -76,9 +78,42 @@ def delete_credentials():
         pass
 
 
+# ---------- 跨进程锁 ----------
+# refresh 会轮换作废旧 refresh_token，并发刷新（同机多个 fetch.py 同时跑）
+# 会拿同一个旧 rt 二次提交，触发服务端重用检测撤销全部令牌，必须串行。
+
+try:
+    import fcntl
+
+    def _lock_file(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+except ImportError:  # Windows
+    import msvcrt
+
+    def _lock_file(f):
+        while True:  # msvcrt 内部只重试 10 秒，包一层等到拿到为止
+            try:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                time.sleep(0.5)
+
+
+@contextlib.contextmanager
+def cred_lock():
+    """锁随文件句柄关闭/进程退出自动释放，不会留死锁。"""
+    os.makedirs(os.path.dirname(CRED_PATH), exist_ok=True)
+    with open(CRED_LOCK_PATH, "a") as f:
+        _lock_file(f)
+        yield
+
+
 # ---------- OAuth 请求 ----------
 
-def token_request(data: dict) -> dict:
+def token_endpoint(data: dict) -> dict:
+    """POST /oauth/token。成功返回令牌 JSON；HTTP 4xx/5xx 返回 {"error": ...}；
+    网络错误抛 urllib.error.URLError。"""
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(
         API_BASE + "/oauth/token", data=body,
@@ -88,41 +123,60 @@ def token_request(data: dict) -> dict:
             return json.load(resp)
     except urllib.error.HTTPError as e:
         try:
-            err = json.load(e)
+            return json.load(e)
         except json.JSONDecodeError:
-            err = {"error": "http_%d" % e.code}
-        raise die(err.get("error", "token_error"), err.get("error_description", ""))
+            return {"error": "http_%d" % e.code}
+
+
+def token_request(data: dict) -> dict:
+    try:
+        result = token_endpoint(data)
     except urllib.error.URLError as e:
         raise die("network_error", str(e.reason))
+    if "error" in result:
+        raise die(result["error"], result.get("error_description", ""))
+    return result
 
 
-def refresh() -> dict:
-    """刷新令牌。invalid_grant（过期/已撤销）时清除本地凭证，引导重新 login。"""
-    creds = load_credentials()
-    if not creds:
-        raise die("not_logged_in", "请先运行: python auth.py login")
-    body = urllib.parse.urlencode({
-        "grant_type": "refresh_token",
-        "refresh_token": creds["refresh_token"],
-        "client_id": CLIENT_ID,
-    }).encode()
-    req = urllib.request.Request(
-        API_BASE + "/oauth/token", data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return save_credentials(json.load(resp))
-    except urllib.error.HTTPError as e:
-        try:
-            err = json.load(e)
-        except json.JSONDecodeError:
-            err = {"error": "http_%d" % e.code}
-        if err.get("error") == "invalid_grant":
+def refresh(known: dict = None) -> dict:
+    """刷新令牌（跨进程串行）。
+
+    known 传调用方手里已失效的凭证：拿到锁后若磁盘上的 refresh_token 已与之
+    不同，说明并发的另一个进程刚刷新过，直接复用其结果，不再发请求。
+    invalid_grant（过期/已撤销）时清除本地凭证，引导重新 login。
+    """
+    with cred_lock():
+        creds = load_credentials()
+        if not creds:
+            raise die("not_logged_in", "请先运行: python auth.py login")
+        if known and creds["refresh_token"] != known["refresh_token"]:
+            return creds
+
+        result = None
+        for attempt in (1, 2):
+            try:
+                result = token_endpoint({
+                    "grant_type": "refresh_token",
+                    "refresh_token": creds["refresh_token"],
+                    "client_id": CLIENT_ID,
+                })
+            except urllib.error.URLError as e:
+                result = {"error": "network_error", "error_description": str(e.reason)}
+            err = result.get("error", "")
+            # 网络错误/5xx 重试一次：请求可能已被服务端处理而响应丢失，
+            # 立即重试仍可拿到新令牌
+            if attempt == 1 and (err == "network_error" or err == "server_error"
+                                 or err.startswith("http_5")):
+                time.sleep(1)
+                continue
+            break
+
+        if result.get("error") == "invalid_grant":
             delete_credentials()
             raise die("invalid_grant", "授权已过期或被撤销，请重新运行: python auth.py login")
-        raise die(err.get("error", "token_error"), err.get("error_description", ""))
-    except urllib.error.URLError as e:
-        raise die("network_error", str(e.reason))
+        if "error" in result:
+            raise die(result["error"], result.get("error_description", ""))
+        return save_credentials(result)
 
 
 def ensure_fresh() -> dict:
@@ -131,7 +185,7 @@ def ensure_fresh() -> dict:
     if not creds:
         raise die("not_logged_in", "请先运行: python auth.py login")
     if creds["expires_at"] - time.time() < REFRESH_AHEAD:
-        return refresh()
+        return refresh(known=creds)
     return creds
 
 

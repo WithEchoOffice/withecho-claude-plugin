@@ -41,7 +41,7 @@ def get(path: str, params: dict, _retried=False) -> dict:
             return json.load(resp)
     except urllib.error.HTTPError as e:
         if e.code == 401 and not _retried:
-            auth.refresh()
+            auth.refresh(known=creds)
             return get(path, params, _retried=True)
         try:
             err = json.load(e)
