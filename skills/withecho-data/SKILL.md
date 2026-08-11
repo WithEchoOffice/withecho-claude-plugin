@@ -52,7 +52,12 @@ python scripts/fetch.py reminders                   # 生效中的提醒（--sta
 - `search` 只回 id + 标题 + 摘要；正文按 id 再调对应 detail 接口
 - 提醒的 `trigger_rule`：once 为 ISO 8601 datetime（含时区），recurring 为 iCal
   RRULE，可直接生成 .ics 或写入日历工具
-- 时间字段均为 UTC（RFC 3339），展示给用户时转为本地时间
+- 时间口径分三类，勿混用：
+  - 时间戳字段（`start_time`/`end_time`/`created_at`/`completed_at` 等，带 `Z` 后缀）
+    为 **UTC**，展示给用户时转为本地时间
+  - `date` 字段与日期参数（`digest --date`、`diary --from/--to`）为**用户本地日**：
+    "今天/昨天"直接按用户本地日期计算传入，**不要**从 UTC 时间戳换算日期（会差一天）
+  - `trigger_rule.datetime` 保留用户设定提醒时的时区，原样使用
 - 接口字段详情见 `references/api.md`
 
 ## 错误处理

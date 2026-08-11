@@ -1,8 +1,12 @@
 # WithEcho 开放数据接口速查
 
 服务地址 `https://api.withecho.cn`，认证 `Authorization: Bearer <access_token>`。
-所有内容字段均为 markdown；时间字段均为 UTC（RFC 3339）。
+所有内容字段均为 markdown。
 数据不存在 / 不属于当前用户 / 尚未生成完毕，统一返回 `404 {"error":"not_found"}`。
+
+时间口径分三类：时间戳字段（带 `Z` 后缀，RFC 3339）为 **UTC**；`date` 字段与
+日期参数（digest 的 `date`、diaries 的 `from`/`to`）为**用户本地日**，勿用 UTC
+时间戳换算日期；提醒的 `trigger_rule.datetime` 保留用户语境时区。
 
 ## 分页通用规则
 
