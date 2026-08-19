@@ -2,14 +2,14 @@
 """读取 WithEcho 开放接口数据，输出 JSON 到 stdout。
 
   python fetch.py daily [--limit N] [--cursor C] [--all]
-  python fetch.py daily-detail --event-id ID
-  python fetch.py digest --date YYYY-MM-DD
+  python fetch.py daily-detail --event-id ID [ID ...]        # 多个 ID 一次拿齐
+  python fetch.py digest (--date YYYY-MM-DD | --from YYYY-MM-DD --to YYYY-MM-DD)
   python fetch.py search --q 关键词 [--limit N]
   python fetch.py diary [--from YYYY-MM-DD --to YYYY-MM-DD | --limit N --cursor C]
-  python fetch.py diary-detail --diary-id ID
+  python fetch.py diary-detail --diary-id ID [ID ...]
   python fetch.py muse [--limit N] [--cursor C] [--all]
   python fetch.py tasks [--status S] [--limit N] [--cursor C] [--all]
-  python fetch.py task-detail --task-id ID
+  python fetch.py task-detail --task-id ID [ID ...]
   python fetch.py reminders [--status S] [--limit N] [--cursor C] [--all]
   python fetch.py asr-files (--date YYYY-MM-DD | --from YYYY-MM-DD --to YYYY-MM-DD)
   python fetch.py asr-export (--filename F1 [F2 ...] | --date YYYY-MM-DD)
@@ -85,6 +85,23 @@ def paged(path: str, list_key: str, limit: int, cursor: str, fetch_all: bool,
         if not cursor:
             break
     return {list_key: items, "next_cursor": cursor}
+
+
+DETAIL_BATCH = 50  # 服务端批量详情单次上限
+
+
+def detail(path: str, id_key: str, ids: list) -> dict:
+    """详情：单个 ID 走单条形态（响应即对象）；多个 ID 走批量形态 <id_key>s=a,b，
+    按 50 个一批拿齐后合并成 {"<列表键>": [...]}（与入参同序，缺失项带 error=not_found）。"""
+    ids = [i for i in dict.fromkeys(ids) if i]
+    if len(ids) == 1:
+        return get(path, {id_key: ids[0]})
+    merged, list_key = [], None
+    for i in range(0, len(ids), DETAIL_BATCH):
+        resp = get(path, {id_key + "s": ",".join(ids[i:i + DETAIL_BATCH])})
+        list_key = next(iter(resp), list_key)
+        merged.extend(resp.get(list_key, []))
+    return {list_key or "items": merged}
 
 
 def emit(data: dict):
@@ -184,11 +201,13 @@ def main():
     daily.add_argument("--cursor", default="")
     daily.add_argument("--all", action="store_true", help="自动翻页拉全部")
 
-    dd = sub.add_parser("daily-detail", help="事件详情（正文+洞察卡片）")
-    dd.add_argument("--event-id", required=True)
+    dd = sub.add_parser("daily-detail", help="事件详情（正文+洞察卡片），可一次传多个 ID")
+    dd.add_argument("--event-id", nargs="+", required=True)
 
-    dg = sub.add_parser("digest", help="单日聚合：事件+日记正文+碎碎念")
-    dg.add_argument("--date", required=True, metavar="YYYY-MM-DD")
+    dg = sub.add_parser("digest", help="按天聚合：事件+日记正文+碎碎念（单日或最多 31 天区间）")
+    dg.add_argument("--date", default="", metavar="YYYY-MM-DD")
+    dg.add_argument("--from", dest="date_from", default="", metavar="YYYY-MM-DD")
+    dg.add_argument("--to", dest="date_to", default="", metavar="YYYY-MM-DD")
 
     se = sub.add_parser("search", help="跨域检索（洞察卡片/日记/任务）")
     se.add_argument("--q", required=True, help="关键词，1-100 字符")
@@ -200,8 +219,8 @@ def main():
     diary.add_argument("--limit", type=int, default=20)
     diary.add_argument("--cursor", default="")
 
-    dy = sub.add_parser("diary-detail", help="日记正文")
-    dy.add_argument("--diary-id", required=True)
+    dy = sub.add_parser("diary-detail", help="日记正文，可一次传多个 ID")
+    dy.add_argument("--diary-id", nargs="+", required=True)
 
     muse = sub.add_parser("muse", help="碎碎念列表（自带正文）")
     muse.add_argument("--limit", type=int, default=20)
@@ -215,8 +234,8 @@ def main():
     tasks.add_argument("--cursor", default="")
     tasks.add_argument("--all", action="store_true", help="自动翻页拉全部")
 
-    tk = sub.add_parser("task-detail", help="任务详情（含 Markdown 交付物全文）")
-    tk.add_argument("--task-id", required=True)
+    tk = sub.add_parser("task-detail", help="任务详情（含 Markdown 交付物全文），可一次传多个 ID")
+    tk.add_argument("--task-id", nargs="+", required=True)
 
     rem = sub.add_parser("reminders", help="提醒列表（默认只看生效中的）")
     rem.add_argument("--status", default="",
@@ -240,9 +259,11 @@ def main():
     if args.cmd == "daily":
         emit(paged("/open/daily", "events", args.limit, args.cursor, args.all))
     elif args.cmd == "daily-detail":
-        emit(get("/open/daily/detail", {"event_id": args.event_id}))
+        emit(detail("/open/daily/detail", "event_id", args.event_id))
     elif args.cmd == "digest":
-        emit(get("/open/digest", {"date": args.date}))
+        if not args.date and not (args.date_from and args.date_to):
+            raise auth.die("invalid_request", "需要 --date，或 --from 与 --to")
+        emit(get("/open/digest", {"date": args.date, "from": args.date_from, "to": args.date_to}))
     elif args.cmd == "search":
         emit(get("/open/search", {"q": args.q, "limit": args.limit}))
     elif args.cmd == "diary":
@@ -251,14 +272,14 @@ def main():
         else:
             emit(get("/open/diaries", {"limit": args.limit, "cursor": args.cursor}))
     elif args.cmd == "diary-detail":
-        emit(get("/open/diaries/detail", {"diary_id": args.diary_id}))
+        emit(detail("/open/diaries/detail", "diary_id", args.diary_id))
     elif args.cmd == "muse":
         emit(paged("/open/muses", "muses", args.limit, args.cursor, args.all))
     elif args.cmd == "tasks":
         emit(paged("/open/tasks", "tasks", args.limit, args.cursor, args.all,
                    extra={"status": args.status}))
     elif args.cmd == "task-detail":
-        emit(get("/open/tasks/detail", {"task_id": args.task_id}))
+        emit(detail("/open/tasks/detail", "task_id", args.task_id))
     elif args.cmd == "reminders":
         emit(paged("/open/reminders", "reminders", args.limit, args.cursor, args.all,
                    extra={"status": args.status}))

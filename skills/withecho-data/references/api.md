@@ -8,6 +8,14 @@
 日期参数（digest 的 `date`、diaries 的 `from`/`to`）为**用户本地日**，勿用 UTC
 时间戳换算日期；提醒的 `trigger_rule.datetime` 保留用户语境时区。
 
+## 批量形态（一次拿齐，别逐条往返）
+
+- 详情接口：`/open/daily/detail?event_ids=a,b`、`/open/diaries/detail?diary_ids=a,b`、`/open/tasks/detail?task_ids=a,b`
+  （逗号分隔或重复传，最多 50 个）→ `{"events"|"diaries"|"tasks": [...]}` 与请求同序，
+  缺失项为 `{"<id_key>": "…", "error": "not_found"}`；单 ID 参数（`event_id` 等）仍返回单个对象
+- `/open/digest?from=&to=`（≤31 天）→ `{"digests": [单日对象, ...]}` 每天一条
+- `/open/asr/export?filename=a&filename=b`（≤50）见下文
+
 ## 分页通用规则
 
 - `limit` 默认 20，最大 50（search 例外：每段默认 10，最大 20）
@@ -32,9 +40,9 @@
 - 只回 id + 标题 + 摘要；正文走 `/open/daily/detail`、`/open/diaries/detail`、`/open/tasks/detail`
 - 碎碎念不在搜索面内（正文短，直接翻 `/open/muses`）
 
-## GET /open/digest?date= — 单日聚合
+## GET /open/digest?date= | ?from=&to= — 按天聚合
 
-参数：`date`（必填，`YYYY-MM-DD`）。一次取齐当天事件 + 日记（含正文）+ 碎碎念：
+参数：`date`（单日）或 `from`+`to`（≤31 天，响应 `{"digests": [...]}` 每天一条）。单日一次取齐当天事件 + 日记（含正文）+ 碎碎念：
 
 ```json
 {
@@ -65,9 +73,9 @@
 }
 ```
 
-## GET /open/daily/detail?event_id= — 事件详情（scope: daily:read）
+## GET /open/daily/detail?event_id= | ?event_ids=a,b — 事件详情（scope: daily:read）
 
-列表字段之外多两项：
+`event_ids` 批量形态响应 `{"events": [...]}`。列表字段之外多两项：
 
 - `detail`：事件详情正文 markdown（可能为空串）
 - `deliverables[]`：洞察卡片 `{tag, subtitle, title, summary, content}`，`content` 为 markdown
@@ -90,7 +98,9 @@
 
 列表不含正文；正文逐篇调详情接口。
 
-## GET /open/diaries/detail?diary_id= — 日记正文（scope: diary:read）
+## GET /open/diaries/detail?diary_id= | ?diary_ids=a,b — 日记正文（scope: diary:read）
+
+`diary_ids` 批量形态响应 `{"diaries": [...]}`。
 
 ```json
 { "diary_id": "01J...", "date": "2026-08-04", "title": "…", "summary": "…", "content": "…markdown…" }
@@ -131,9 +141,9 @@
 
 `event_id` 非空 = 来自日常事件；为空 = 来自对话。
 
-## GET /open/tasks/detail?task_id= — 任务详情（scope: task:read）
+## GET /open/tasks/detail?task_id= | ?task_ids=a,b — 任务详情（scope: task:read）
 
-列表字段之外多一项 `result_md`：Markdown 交付物全文（未完成为空）。
+列表字段之外多一项 `result_md`：Markdown 交付物全文（未完成为空）。`task_ids` 批量形态响应 `{"tasks": [...]}`。
 
 ## GET /open/reminders — 提醒列表（scope: reminder:read）
 

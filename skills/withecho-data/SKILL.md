@@ -30,34 +30,40 @@ login 需要用户在浏览器里操作，运行后提示用户完成授权，�
 ## 读取数据（均输出 JSON 到 stdout）
 
 **按需检索优先**：回答开放式问题先用 `search` / `digest` 定位，不要盲目 `--all` 全量拉取。
+**一次拿齐**：详情类命令都接受多个 ID（`--event-id A B C`），`digest` 支持 `--from/--to` 区间——
+需要多条时一条命令传齐，不要循环逐条调用（每次调用都是一轮 agent 往返）。
 
 ```bash
 # 定位与聚合（推荐入口）
 python scripts/fetch.py search --q 关键词          # 跨域检索：洞察卡片/日记/任务
 python scripts/fetch.py digest --date 2026-08-04   # 单日聚合：事件+日记正文+碎碎念
+python scripts/fetch.py digest --from 2026-08-01 --to 2026-08-07   # 多日聚合（≤31 天），每天一条
 
 # 日常 / 日记 / 碎碎念
 python scripts/fetch.py daily --limit 20            # 日常事件列表（新→旧）
-python scripts/fetch.py daily-detail --event-id ID  # 事件详情：正文 + 洞察卡片
+python scripts/fetch.py daily-detail --event-id ID [ID ...]   # 事件详情：正文 + 洞察卡片（多个 ID 一次拿齐）
 python scripts/fetch.py diary --from 2026-08-01 --to 2026-08-05   # 按日期范围
-python scripts/fetch.py diary-detail --diary-id ID  # 日记正文
+python scripts/fetch.py diary-detail --diary-id ID [ID ...]   # 日记正文（多个 ID 一次拿齐）
 python scripts/fetch.py muse --limit 50             # 碎碎念（列表自带正文）
 
 # 任务 / 提醒
 python scripts/fetch.py tasks --status completed    # 研究任务列表
-python scripts/fetch.py task-detail --task-id ID    # 任务交付物 Markdown 全文
+python scripts/fetch.py task-detail --task-id ID [ID ...]     # 任务交付物 Markdown 全文（多个 ID 一次拿齐）
 python scripts/fetch.py reminders                   # 生效中的提醒（--status all 看全部）
 ```
 
 - 列表接口分页：响应里 `next_cursor` 非空时，用 `--cursor <next_cursor>` 取更早数据；
   确要全量时用 `--all` 自动翻页
-- `search` 只回 id + 标题 + 摘要；正文按 id 再调对应 detail 接口
+- `search` 只回 id + 标题 + 摘要；正文把命中的 id 一次传给对应 detail 命令拿齐
+- 详情命令传 1 个 ID 时输出即该对象；传多个时输出 `{"events"|"diaries"|"tasks": [...]}`
+  与入参同序，找不到的项为 `{"<id>": "…", "error": "not_found"}`；`digest --from/--to` 输出
+  `{"digests": [...]}` 每天一条（没数据的天段为 `[]`/`null`）
 - 提醒的 `trigger_rule`：once 为 ISO 8601 datetime（含时区），recurring 为 iCal
   RRULE，可直接生成 .ics 或写入日历工具
 - 时间口径分三类，勿混用：
   - 时间戳字段（`start_time`/`end_time`/`created_at`/`completed_at` 等，带 `Z` 后缀）
     为 **UTC**，展示给用户时转为本地时间
-  - `date` 字段与日期参数（`digest --date`、`diary --from/--to`、`asr-files --date/--from/--to`）为**用户本地日**：
+  - `date` 字段与日期参数（`digest --date/--from/--to`、`diary --from/--to`、`asr-files --date/--from/--to`）为**用户本地日**：
     "今天/昨天"直接按用户本地日期计算传入，**不要**从 UTC 时间戳换算日期（会差一天）
   - `trigger_rule.datetime` 保留用户设定提醒时的时区，原样使用
 - 接口字段详情见 `references/api.md`
