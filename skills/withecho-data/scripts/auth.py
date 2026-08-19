@@ -13,6 +13,7 @@
 import base64
 import contextlib
 import hashlib
+import html
 import http.server
 import json
 import os
@@ -24,10 +25,11 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-API_BASE = os.environ.get("WITHECHO_API_BASE", "https://api.withecho.cn")
+API_BASE = os.environ.get("WITHECHO_API_BASE", "https://api.withecho.cn").rstrip("/")
 CLIENT_ID = os.environ.get("WITHECHO_CLIENT_ID", "01KZ811QEVV9ZYBQM3NXYXQT8Z")
 SCOPES = "profile daily:read diary:read muse:read task:read reminder:read asr:read"
-CRED_PATH = os.path.expanduser("~/.withecho/credentials.json")
+BASE_DIR = os.path.expanduser("~/.withecho")  # 凭证/缓存根目录，整体 0700
+CRED_PATH = os.path.join(BASE_DIR, "credentials.json")
 CRED_LOCK_PATH = CRED_PATH + ".lock"
 LOGIN_TIMEOUT = 300  # 等待浏览器回调的秒数
 REFRESH_AHEAD = 300  # access_token 剩余不足 5 分钟即提前刷新
@@ -35,6 +37,34 @@ REFRESH_AHEAD = 300  # access_token 剩余不足 5 分钟即提前刷新
 
 def b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def check_api_base():
+    """令牌走 Bearer 头，非本机地址必须 https，防止环境变量误配成 http 明文传令牌。"""
+    u = urllib.parse.urlsplit(API_BASE)
+    if u.scheme == "https":
+        return
+    if u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1"):
+        return  # 本机联调放行
+    raise die("insecure_api_base",
+              "WITHECHO_API_BASE 必须为 https（本机 127.0.0.1/localhost 除外）：%s" % API_BASE)
+
+
+def private_makedirs(path: str):
+    """建目录并把 BASE_DIR 到 path 的每一级都收紧为 0700（已存在也收一次）。
+    凭证、响应缓存、ASR 原文都放在 BASE_DIR 下，不能依赖 umask；
+    os.makedirs 的 mode 只对最末一级生效，中间层要逐级 chmod。"""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    base = os.path.realpath(BASE_DIR)
+    cur = os.path.realpath(path)
+    while True:
+        try:
+            os.chmod(cur, 0o700)
+        except OSError:
+            pass
+        if cur == base or not cur.startswith(base + os.sep):
+            break
+        cur = os.path.dirname(cur)
 
 
 def die(error: str, description: str = "") -> "SystemExit":
@@ -62,9 +92,10 @@ def save_credentials(token: dict):
         "scope": token.get("scope", ""),
         "openid": token.get("openid", ""),
     }
-    os.makedirs(os.path.dirname(CRED_PATH), exist_ok=True)
+    private_makedirs(os.path.dirname(CRED_PATH))
     tmp = CRED_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # 创建即 0600，不留窗口
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(creds, f, ensure_ascii=False, indent=2)
     os.chmod(tmp, 0o600)
     os.replace(tmp, CRED_PATH)
@@ -103,7 +134,7 @@ except ImportError:  # Windows
 @contextlib.contextmanager
 def cred_lock():
     """锁随文件句柄关闭/进程退出自动释放，不会留死锁。"""
-    os.makedirs(os.path.dirname(CRED_PATH), exist_ok=True)
+    private_makedirs(os.path.dirname(CRED_PATH))
     with open(CRED_LOCK_PATH, "a") as f:
         _lock_file(f)
         yield
@@ -114,6 +145,7 @@ def cred_lock():
 def token_endpoint(data: dict) -> dict:
     """POST /oauth/token。成功返回令牌 JSON；HTTP 4xx/5xx 返回 {"error": ...}；
     网络错误抛 urllib.error.URLError。"""
+    check_api_base()
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(
         API_BASE + "/oauth/token", data=body,
@@ -198,10 +230,7 @@ CALLBACK_HTML = """<!doctype html><meta charset="utf-8">
 
 
 def login():
-    if CLIENT_ID == "REPLACE_WITH_CLIENT_ID":
-        raise die("missing_client_id",
-                  "未配置 client_id：设置环境变量 WITHECHO_CLIENT_ID，或联系 WithEcho 获取")
-
+    check_api_base()
     verifier = b64url(secrets.token_bytes(32))
     challenge = b64url(hashlib.sha256(verifier.encode()).digest())
     state = b64url(secrets.token_bytes(16))
@@ -214,11 +243,18 @@ def login():
                 self.send_error(404)
                 return
             q = urllib.parse.parse_qs(parsed.query)
-            result["code"] = q.get("code", [""])[0]
+            code = q.get("code", [""])[0]
+            error = q.get("error", [""])[0]
+            if not code and not error:
+                # 既无 code 也无 error 的请求（浏览器里任意页面都能向 localhost 打探）
+                # 不算回调结果，不结束等待，避免被打断登录
+                self.send_error(400)
+                return
+            result["code"], result["error"] = code, error
             result["state"] = q.get("state", [""])[0]
-            result["error"] = q.get("error", [""])[0]
-            ok = result["code"] and not result["error"]
-            msg = "授权成功" if ok else "授权未完成（%s）" % (result["error"] or "无回调参数")
+            ok = code and not error
+            # error 来自 URL 查询串，进 HTML 前必须转义
+            msg = "授权成功" if ok else "授权未完成（%s）" % html.escape(error)
             body = CALLBACK_HTML.format(msg=msg).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -250,17 +286,17 @@ def login():
     server.timeout = 1
     deadline = time.time() + LOGIN_TIMEOUT
     try:
-        while "code" not in result and time.time() < deadline:
+        while not result and time.time() < deadline:
             server.handle_request()
     finally:
         server.server_close()
 
-    if "code" not in result:
+    if not result:
         raise die("timeout", "等待授权回调超时（%d 秒），请重试" % LOGIN_TIMEOUT)
-    if result["error"]:
-        raise die(result["error"], "用户拒绝或授权失败")
     if result["state"] != state:
         raise die("state_mismatch", "state 校验失败，请重试")
+    if result["error"]:
+        raise die(result["error"], "用户拒绝或授权失败")
 
     token = token_request({
         "grant_type": "authorization_code",
@@ -292,6 +328,7 @@ def status():
 def logout():
     creds = load_credentials()
     if creds:
+        check_api_base()
         # RFC 7009 不级联：refresh / access 各吊销一次，恒 200
         for token in (creds.get("refresh_token"), creds.get("access_token")):
             if not token:

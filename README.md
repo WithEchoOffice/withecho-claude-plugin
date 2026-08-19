@@ -38,6 +38,10 @@
 **首次使用**会自动弹出浏览器完成 WithEcho 授权（手机号 + 短信验证码）。
 之后令牌自动刷新，30 天内活跃无需重新登录。
 
+读取结果默认缓存在本地 `~/.withecho/cache/`：列表/搜索/聚合 10 分钟内不重复请求服务器，
+正文详情永久缓存；你说"数据没更新""再拉一次"时 Claude 会带 `--refresh` 穿透拉最新。
+想手动清缓存：`python skills/withecho-data/scripts/fetch.py cache-clear`（ASR 原文缓存不受影响）。
+
 | 场景 | 操作 |
 |------|------|
 | 更新插件 | `/plugin marketplace update withecho` |
@@ -88,7 +92,7 @@ Codex、Cursor、opencode、pi 都会读取 `~/.agents/skills/`，装一次多�
 skills/withecho-data/
 ├── SKILL.md                   # 技能入口（Claude 按 description 自动触发）
 ├── scripts/auth.py            # OAuth 登录/刷新/登出（Python 3 标准库）
-├── scripts/fetch.py           # 拉取 daily/diary/muse/tasks/reminders + search/digest
+├── scripts/fetch.py           # 拉取 daily/diary/muse/tasks/reminders + search/digest + asr（本地缓存优先，--refresh 穿透）
 └── references/api.md          # 开放接口字段速查
 ```
 
@@ -98,12 +102,15 @@ skills/withecho-data/
 内置分发是安全的）。可用环境变量覆盖：
 
 - `WITHECHO_CLIENT_ID`：替换 client_id
-- `WITHECHO_API_BASE`：指向非生产环境（默认 `https://api.withecho.cn`）
+- `WITHECHO_API_BASE`：指向非生产环境（默认 `https://api.withecho.cn`；非本机地址必须是 https）
+- `WITHECHO_CACHE_TTL`：列表/搜索/聚合类查询的本地缓存有效期（秒，默认 600；`0` 为不过期）
 
 本地开发调试可不经安装直接加载：`claude --plugin-dir /path/to/withecho-claude-plugin`。
 
 ## 数据与安全
 
-- 令牌仅保存在你本机 `~/.withecho/credentials.json`（0600 权限），刷新原子写入
+- 令牌仅保存在你本机 `~/.withecho/credentials.json`，刷新原子写入；`~/.withecho/` 下的令牌、
+  响应缓存、ASR 原文缓存整体 0700/0600，仅当前系统用户可读
+- 缓存路径由服务端返回的文件名/ID 拼出，脚本对其做白名单校验，不会读写 `~/.withecho/` 之外的文件
 - 所有接口只读；内容以 markdown 返回
 - 服务端不向第三方（包括本插件）提供手机号等敏感信息，用户标识为按应用隔离的 openid
