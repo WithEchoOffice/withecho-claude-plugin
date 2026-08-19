@@ -11,8 +11,11 @@
   python fetch.py tasks [--status S] [--limit N] [--cursor C] [--all]
   python fetch.py task-detail --task-id ID
   python fetch.py reminders [--status S] [--limit N] [--cursor C] [--all]
+  python fetch.py asr-files (--date YYYY-MM-DD | --from YYYY-MM-DD --to YYYY-MM-DD)
+  python fetch.py asr-export (--filename segments/YYYY/MM/DD/<id>.txt | --date YYYY-MM-DD)
 
 401 自动刷新令牌重试一次；仍失败则提示重新登录。
+asr-export 结果永久缓存在 ~/.withecho/asr/<openid>/，命中本地不请求服务器、不扣额度。
 """
 
 import argparse
@@ -74,6 +77,56 @@ def emit(data: dict):
     print()
 
 
+# ---------- ASR 原文本地缓存 ----------
+# 每导出一个转写文件都消耗会员月配额（同一文件重复导出照计），所以导出结果永久留在本地
+# ~/.withecho/asr/<openid>/<filename>，之后先查本地、没有再向服务器要。按 openid 分目录，
+# 换账号登录不会串数据，退出登录也不清（用户自己的数据，保留在本地）。
+
+ASR_CACHE_DIR = os.path.expanduser("~/.withecho/asr")
+
+
+def asr_cache_path(filename: str) -> str:
+    creds = auth.load_credentials() or {}
+    openid = creds.get("openid") or "default"
+    return os.path.join(ASR_CACHE_DIR, openid, *filename.split("/"))
+
+
+def asr_cache_read(filename: str):
+    try:
+        with open(asr_cache_path(filename), encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def asr_cache_write(filename: str, content: str):
+    path = asr_cache_path(filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp, path)
+
+
+def asr_export_one(filename: str) -> dict:
+    """单个转写文件：本地命中直接返回（不请求、不扣额度），否则向服务器导出并落盘。"""
+    cached = asr_cache_read(filename)
+    if cached is not None:
+        return {"filename": filename, "source": "local", "content": cached}
+    resp = get("/open/asr/export", {"filename": filename})
+    asr_cache_write(filename, resp.get("content", ""))
+    return {"filename": filename, "source": "server", "content": resp.get("content", ""),
+            "quota": resp.get("quota")}
+
+
+def asr_files(date: str, date_from: str, date_to: str) -> dict:
+    params = {"date": date} if date else {"from": date_from, "to": date_to}
+    resp = get("/open/asr/files", params)
+    for f in resp.get("files", []):
+        f["cached"] = os.path.exists(asr_cache_path(f["filename"]))
+    return resp
+
+
 def main():
     p = argparse.ArgumentParser(description="读取 WithEcho 数据")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -124,6 +177,15 @@ def main():
     rem.add_argument("--cursor", default="")
     rem.add_argument("--all", action="store_true", help="自动翻页拉全部")
 
+    af = sub.add_parser("asr-files", help="按天列出语音识别原文文件与事件对应关系（不扣额度）")
+    af.add_argument("--date", default="", metavar="YYYY-MM-DD")
+    af.add_argument("--from", dest="date_from", default="", metavar="YYYY-MM-DD")
+    af.add_argument("--to", dest="date_to", default="", metavar="YYYY-MM-DD")
+
+    ae = sub.add_parser("asr-export", help="导出语音识别原文（本地缓存优先，未缓存的每个文件扣 1 次月配额）")
+    ae.add_argument("--filename", default="", help="segments/YYYY/MM/DD/<id>.txt，来自 daily-detail 的 transcript_file 或 asr-files")
+    ae.add_argument("--date", default="", metavar="YYYY-MM-DD", help="导出当天全部文件（已缓存的不再请求）")
+
     args = p.parse_args()
 
     if args.cmd == "daily":
@@ -151,6 +213,24 @@ def main():
     elif args.cmd == "reminders":
         emit(paged("/open/reminders", "reminders", args.limit, args.cursor, args.all,
                    extra={"status": args.status}))
+    elif args.cmd == "asr-files":
+        if not args.date and not (args.date_from and args.date_to):
+            raise auth.die("invalid_request", "需要 --date，或 --from 与 --to")
+        emit(asr_files(args.date, args.date_from, args.date_to))
+    elif args.cmd == "asr-export":
+        if bool(args.filename) == bool(args.date):
+            raise auth.die("invalid_request", "--filename 与 --date 二选一")
+        if args.filename:
+            emit(asr_export_one(args.filename))
+        else:
+            listing = asr_files(args.date, "", "")
+            files, quota = [], listing.get("quota")
+            for f in listing.get("files", []):
+                item = asr_export_one(f["filename"])
+                item["event_ids"] = f.get("event_ids", [])
+                quota = item.pop("quota", None) or quota
+                files.append(item)
+            emit({"date": args.date, "files": files, "quota": quota})
 
 
 if __name__ == "__main__":

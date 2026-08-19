@@ -71,6 +71,8 @@
 
 - `detail`：事件详情正文 markdown（可能为空串）
 - `deliverables[]`：洞察卡片 `{tag, subtitle, title, summary, content}`，`content` 为 markdown
+- `transcript_file`：来源转写文件名 `segments/YYYY/MM/DD/<id>.txt`（令牌带 `asr:read` 时下发），
+  传给 `/open/asr/export` 可拿原文；无来源时缺省
 
 ## GET /open/diaries — 日记列表（scope: diary:read）
 
@@ -156,6 +158,29 @@
 - `type=recurring`：`trigger_rule.rrule` 为 iCal RRULE，另有 `last_triggered_at`
 - 可直接生成 .ics 或写入日历工具
 
+## GET /open/asr/files?date= | ?from=&to= — 转写文件按天列表（scope: asr:read，不计次）
+
+参数：`date`（单日）或 `from`+`to`（闭区间，最多 31 天），均为用户本地日
+
+```json
+{
+  "files": [{ "filename": "segments/2026/08/19/01K….txt", "date": "2026-08-19", "event_ids": ["01K…", "01K…"] }],
+  "quota": { "limit": 1000, "used": 12, "remaining": 988, "period_end": "2026-09-05T03:00:00Z" }
+}
+```
+
+- 从当天可见的日常事件反查来源文件，一个文件对应它切出的全部事件；没有事件的录音段不出现
+- `quota` 为当前会员窗口的导出额度（免费会员 `limit=0`）
+
+## GET /open/asr/export?filename= — 导出转写原文（scope: asr:read，成功计 1 次）
+
+```json
+{ "filename": "segments/2026/08/19/01K….txt", "content": "对话时间段：…\n1.[张三,09:30:05,09:30:12]…\n", "quota": { … } }
+```
+
+- 每次成功导出扣 1 次月配额（同一文件重复导出照计），脚本层已做本地缓存，勿绕过
+- 免费会员 `403 membership_required`；用尽 `429 quota_exceeded`；文件不存在 / 非本人 `404`
+
 ## 错误
 
 | HTTP | error | 处理 |
@@ -164,3 +189,5 @@
 | 401 | `invalid_token` | 刷新令牌后重试一次；仍失败重新授权 |
 | 403 | `insufficient_scope` | 授权时未同意对应权限，重新 login |
 | 404 | `not_found` | 数据不存在，如实告知用户 |
+| 403 | `membership_required` | ASR 导出仅付费会员可用，如实告知 |
+| 429 | `quota_exceeded` | ASR 导出本月次数用尽，如实告知，不要重试 |
