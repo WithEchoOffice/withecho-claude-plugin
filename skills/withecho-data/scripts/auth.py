@@ -84,7 +84,8 @@ def load_credentials():
 
 
 def save_credentials(token: dict):
-    """令牌落盘。refresh_token 轮换后旧值即废，必须原子写入（tmp + replace）。"""
+    """令牌落盘。refresh_token 轮换后旧值即废，必须原子写入（tmp + replace）。
+    scope 以服务端本次响应为准——刷新时会按当下的授权关系与应用允许范围重定，可能比上次窄。"""
     creds = {
         "access_token": token["access_token"],
         "refresh_token": token["refresh_token"],
@@ -251,6 +252,7 @@ def login():
                 self.send_error(400)
                 return
             result["code"], result["error"] = code, error
+            result["error_description"] = q.get("error_description", [""])[0]
             result["state"] = q.get("state", [""])[0]
             ok = code and not error
             # error 来自 URL 查询串，进 HTML 前必须转义
@@ -295,8 +297,13 @@ def login():
         raise die("timeout", "等待授权回调超时（%d 秒），请重试" % LOGIN_TIMEOUT)
     if result["state"] != state:
         raise die("state_mismatch", "state 校验失败，请重试")
+    if result["error"] == "invalid_scope":
+        # 申请的 scope 超出了本应用在 WithEcho 侧当前允许的范围（权限被收回），
+        # 重试无意义，如实告知用户
+        raise die("invalid_scope", "WithEcho 当前未向本应用开放全部所需权限，无法完成授权："
+                  + (result["error_description"] or SCOPES))
     if result["error"]:
-        raise die(result["error"], "用户拒绝或授权失败")
+        raise die(result["error"], result["error_description"] or "用户拒绝或授权失败")
 
     token = token_request({
         "grant_type": "authorization_code",
@@ -317,10 +324,14 @@ def status():
     if not creds:
         print(json.dumps({"logged_in": False}))
         return
+    granted = creds.get("scope", "").split()
     print(json.dumps({
         "logged_in": True,
         "openid": creds.get("openid", ""),
         "scope": creds.get("scope", ""),
+        # 令牌 scope 会随授权关系 / 应用允许范围在刷新时自动收窄，
+        # 这里列出相对 skill 所需缺了哪些，缺的对应命令会报 insufficient_scope
+        "missing_scope": [s for s in SCOPES.split() if s not in granted],
         "access_token_expires_in": max(0, int(creds["expires_at"] - time.time())),
     }, ensure_ascii=False))
 

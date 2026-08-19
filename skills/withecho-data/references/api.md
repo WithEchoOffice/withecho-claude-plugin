@@ -208,7 +208,7 @@
 |------|-------|------|
 | 400 | `invalid_request` | 参数缺失或格式错误 |
 | 401 | `invalid_token` | 刷新令牌后重试一次；仍失败重新授权 |
-| 403 | `insufficient_scope` | 授权时未同意对应权限，重新 login |
+| 403 | `insufficient_scope` | 令牌缺对应权限（未同意 / 刷新时被收窄），重新 login；login 报 `invalid_scope` 即权限已被收回 |
 | 404 | `not_found` | 数据不存在，如实告知用户 |
 | 403 | `membership_required` | ASR 导出仅付费会员可用，如实告知 |
 | 429 | `quota_exceeded` | ASR 导出本月次数用尽，如实告知，不要重试 |

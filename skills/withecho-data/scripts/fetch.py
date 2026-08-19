@@ -87,7 +87,12 @@ def request(path: str, params: dict, _retried=False) -> dict:
             err = json.load(e)
         except json.JSONDecodeError:
             err = {"error": "http_%d" % e.code}
-        raise APIError(err.get("error", "request_error"), err.get("error_description", ""))
+        desc = err.get("error_description", "")
+        if err.get("error") == "insufficient_scope":
+            # 令牌 scope 可能在刷新时被收窄（授权关系 / 应用允许范围变化），带上当前值便于判断
+            desc += "；当前令牌 scope=%s。运行 python scripts/auth.py login 重新授权，" \
+                    "若 login 报 invalid_scope 说明该权限已被 WithEcho 收回" % (creds.get("scope") or "-")
+        raise APIError(err.get("error", "request_error"), desc)
     except urllib.error.URLError as e:
         raise APIError("network_error", str(e.reason))
 

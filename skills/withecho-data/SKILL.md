@@ -19,13 +19,16 @@ description: 读取用户 WithEcho（Echo）账号的日常、日记、碎碎念
 
 所有命令都在本 skill 的 `scripts/` 目录下运行（Python 3，无第三方依赖）。
 
-1. 先检查登录态：`python scripts/auth.py status`
+1. 先检查登录态：`python scripts/auth.py status`（`missing_scope` 非空表示令牌缺少本 skill
+   需要的某些权限，对应命令会报 `insufficient_scope`——先 login 补授权再动手）
 2. 未登录时运行：`python scripts/auth.py login` —— 会自动打开浏览器完成 WithEcho
    授权（手机号 + 短信验证码），完成后令牌保存在 `~/.withecho/credentials.json`
-3. access_token 过期由脚本自动刷新，无需手动处理
+3. access_token 过期由脚本自动刷新，无需手动处理；刷新后的 scope 以服务端为准，
+   可能比上次窄（用户撤销重授、或 WithEcho 侧收窄了本应用的权限范围）
 4. 用户要求退出/解绑时：`python scripts/auth.py logout`（吊销令牌并删除本地凭证）
 
 login 需要用户在浏览器里操作，运行后提示用户完成授权，命令会等待回调（最长 5 分钟）。
+授权页短信登录有 5 次/分钟/IP 的限流，页面提示"请求过于频繁"时等一分钟再试，不要反复点。
 
 ## 读取数据（均输出 JSON 到 stdout）
 
@@ -110,8 +113,9 @@ python scripts/fetch.py asr-export --date 2026-08-19           # 导出当天全
 
 - `未登录` / `invalid_grant`：运行 `python scripts/auth.py login` 重新授权
   （用户可能在 WithEcho App 里撤销过授权，这是正常路径，不要反复重试）
-- `insufficient_scope`：用户授权时未同意对应权限，引导重新 login
-  （老用户升级插件后首次用任务/提醒/ASR 导出也会遇到——重新 login 补授权即可）
+- `insufficient_scope`：令牌缺对应权限——用户授权时未同意、老用户升级插件后首次用新数据面、
+  或刷新令牌时 scope 被收窄（错误描述里带当前 scope），引导重新 login 补授权；
+  若 login 报 `invalid_scope`，说明 WithEcho 已收回本应用的该项权限，如实告知用户，不要反复重试
 - `not_found`：数据不存在或尚未生成完毕，如实告知用户即可
 - `membership_required` / `quota_exceeded`：ASR 导出不开放 / 本月次数用尽，如实告知，不要重试
 - `search` / `digest` 响应里某段为 `null` 表示未授权对应 scope，`[]` 才是无数据
