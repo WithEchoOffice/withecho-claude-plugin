@@ -12,7 +12,7 @@
   python fetch.py task-detail --task-id ID
   python fetch.py reminders [--status S] [--limit N] [--cursor C] [--all]
   python fetch.py asr-files (--date YYYY-MM-DD | --from YYYY-MM-DD --to YYYY-MM-DD)
-  python fetch.py asr-export (--filename segments/YYYY/MM/DD/<id>.txt | --date YYYY-MM-DD)
+  python fetch.py asr-export (--filename F1 [F2 ...] | --date YYYY-MM-DD)
 
 401 自动刷新令牌重试一次；仍失败则提示重新登录。
 asr-export 结果永久缓存在 ~/.withecho/asr/<openid>/，命中本地不请求服务器、不扣额度。
@@ -32,7 +32,14 @@ import auth  # noqa: E402
 MAX_PAGES = 50  # --all 翻页保险上限
 
 
-def get(path: str, params: dict, _retried=False) -> dict:
+class APIError(Exception):
+    def __init__(self, error: str, description: str = ""):
+        super().__init__(error)
+        self.error, self.description = error, description
+
+
+def request(path: str, params: dict, _retried=False) -> dict:
+    """GET 开放接口；HTTP 错误抛 APIError（401 先自动刷新令牌重试一次）。"""
     creds = auth.ensure_fresh()
     query = {k: v for k, v in params.items() if v not in (None, "")}
     url = auth.API_BASE + path
@@ -45,14 +52,22 @@ def get(path: str, params: dict, _retried=False) -> dict:
     except urllib.error.HTTPError as e:
         if e.code == 401 and not _retried:
             auth.refresh(known=creds)
-            return get(path, params, _retried=True)
+            return request(path, params, _retried=True)
         try:
             err = json.load(e)
         except json.JSONDecodeError:
             err = {"error": "http_%d" % e.code}
-        raise auth.die(err.get("error", "request_error"), err.get("error_description", ""))
+        raise APIError(err.get("error", "request_error"), err.get("error_description", ""))
     except urllib.error.URLError as e:
-        raise auth.die("network_error", str(e.reason))
+        raise APIError("network_error", str(e.reason))
+
+
+def get(path: str, params: dict) -> dict:
+    """request 的命令行包装：错误直接以 JSON 报错退出。"""
+    try:
+        return request(path, params)
+    except APIError as e:
+        raise auth.die(e.error, e.description)
 
 
 def paged(path: str, list_key: str, limit: int, cursor: str, fetch_all: bool,
@@ -108,15 +123,48 @@ def asr_cache_write(filename: str, content: str):
     os.replace(tmp, path)
 
 
-def asr_export_one(filename: str) -> dict:
-    """单个转写文件：本地命中直接返回（不请求、不扣额度），否则向服务器导出并落盘。"""
-    cached = asr_cache_read(filename)
-    if cached is not None:
-        return {"filename": filename, "source": "local", "content": cached}
-    resp = get("/open/asr/export", {"filename": filename})
-    asr_cache_write(filename, resp.get("content", ""))
-    return {"filename": filename, "source": "server", "content": resp.get("content", ""),
-            "quota": resp.get("quota")}
+ASR_EXPORT_BATCH = 50  # 服务端单次导出上限
+
+
+def asr_export_many(filenames: list) -> dict:
+    """批量导出：本地命中的直接返回（不请求、不扣额度），其余按 50 个一批向服务器要并落盘。
+    输出 files 与入参顺序一致，每项 source=local|server，或 error=not_found|quota_exceeded。"""
+    seen, ordered = set(), []
+    for f in filenames:
+        if f and f not in seen:
+            seen.add(f)
+            ordered.append(f)
+    results, missing = {}, []
+    for f in ordered:
+        cached = asr_cache_read(f)
+        if cached is not None:
+            results[f] = {"filename": f, "source": "local", "content": cached}
+        else:
+            missing.append(f)
+    quota, exhausted = None, False
+    for i in range(0, len(missing), ASR_EXPORT_BATCH):
+        if exhausted:
+            break  # 余量已尽，剩下的批次不再请求
+        batch = missing[i:i + ASR_EXPORT_BATCH]
+        try:
+            resp = request("/open/asr/export", {"filename": ",".join(batch)})
+        except APIError as e:
+            if e.error == "quota_exceeded" and (results or i > 0):
+                exhausted = True  # 已有本地/前几批结果，整体 429 只标剩余项，不丢已得内容
+                continue
+            raise auth.die(e.error, e.description)
+        quota = resp.get("quota") or quota
+        for item in resp.get("files", []):
+            f = item.get("filename", "")
+            if item.get("error"):
+                results[f] = {"filename": f, "error": item["error"]}
+            else:
+                asr_cache_write(f, item.get("content", ""))
+                results[f] = {"filename": f, "source": "server", "content": item.get("content", "")}
+        if quota and quota.get("remaining") == 0:
+            exhausted = True
+    files = [results.get(f) or {"filename": f, "error": "quota_exceeded"} for f in ordered]
+    return {"files": files, "quota": quota}
 
 
 def asr_files(date: str, date_from: str, date_to: str) -> dict:
@@ -182,8 +230,9 @@ def main():
     af.add_argument("--from", dest="date_from", default="", metavar="YYYY-MM-DD")
     af.add_argument("--to", dest="date_to", default="", metavar="YYYY-MM-DD")
 
-    ae = sub.add_parser("asr-export", help="导出语音识别原文（本地缓存优先，未缓存的每个文件扣 1 次月配额）")
-    ae.add_argument("--filename", default="", help="segments/YYYY/MM/DD/<id>.txt，来自 daily-detail 的 transcript_file 或 asr-files")
+    ae = sub.add_parser("asr-export", help="批量导出语音识别原文（本地缓存优先，未缓存的每个文件扣 1 次月配额）")
+    ae.add_argument("--filename", nargs="*", default=[],
+                    help="一个或多个 segments/YYYY/MM/DD/<id>.txt，来自 daily-detail 的 transcript_file 或 asr-files")
     ae.add_argument("--date", default="", metavar="YYYY-MM-DD", help="导出当天全部文件（已缓存的不再请求）")
 
     args = p.parse_args()
@@ -221,16 +270,15 @@ def main():
         if bool(args.filename) == bool(args.date):
             raise auth.die("invalid_request", "--filename 与 --date 二选一")
         if args.filename:
-            emit(asr_export_one(args.filename))
+            emit(asr_export_many(args.filename))
         else:
             listing = asr_files(args.date, "", "")
-            files, quota = [], listing.get("quota")
-            for f in listing.get("files", []):
-                item = asr_export_one(f["filename"])
-                item["event_ids"] = f.get("event_ids", [])
-                quota = item.pop("quota", None) or quota
-                files.append(item)
-            emit({"date": args.date, "files": files, "quota": quota})
+            event_ids = {f["filename"]: f.get("event_ids", []) for f in listing.get("files", [])}
+            out = asr_export_many(list(event_ids))
+            for item in out["files"]:
+                item["event_ids"] = event_ids.get(item["filename"], [])
+            out["quota"] = out.get("quota") or listing.get("quota")
+            emit({"date": args.date, **out})
 
 
 if __name__ == "__main__":

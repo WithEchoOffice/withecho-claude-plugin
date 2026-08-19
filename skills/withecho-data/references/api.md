@@ -172,14 +172,25 @@
 - 从当天可见的日常事件反查来源文件，一个文件对应它切出的全部事件；没有事件的录音段不出现
 - `quota` 为当前会员窗口的导出额度（免费会员 `limit=0`）
 
-## GET /open/asr/export?filename= — 导出转写原文（scope: asr:read，成功计 1 次）
+## GET /open/asr/export?filename=a&filename=b — 批量导出转写原文（scope: asr:read，每个成功文件计 1 次）
+
+`filename` 可重复传或逗号分隔，单次最多 50 个。
 
 ```json
-{ "filename": "segments/2026/08/19/01K….txt", "content": "对话时间段：…\n1.[张三,09:30:05,09:30:12]…\n", "quota": { … } }
+{
+  "files": [
+    { "filename": "segments/2026/08/19/01K….txt", "content": "对话时间段：…\n1.[张三,09:30:05,09:30:12]…\n" },
+    { "filename": "segments/2026/08/19/01K….txt", "error": "quota_exceeded" },
+    { "filename": "segments/2026/08/19/01K….txt", "error": "not_found" }
+  ],
+  "quota": { "limit": 1000, "used": 1000, "remaining": 0, "period_end": "…" }
+}
 ```
 
-- 每次成功导出扣 1 次月配额（同一文件重复导出照计），脚本层已做本地缓存，勿绕过
-- 免费会员 `403 membership_required`；用尽 `429 quota_exceeded`；文件不存在 / 非本人 `404`
+- `files` 与请求同序，每项要么 `content` 要么 `error`；`not_found`（不存在 / 非本人）不扣次
+- 余量不够时按顺序能给多少给多少，给不到的标 `quota_exceeded`；一个都给不了才整体 `429 quota_exceeded`
+- 免费会员整体 `403 membership_required`
+- 同一文件重复导出照计，脚本层已做本地缓存，勿绕过
 
 ## 错误
 

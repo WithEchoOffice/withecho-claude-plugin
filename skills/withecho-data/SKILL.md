@@ -67,15 +67,19 @@ python scripts/fetch.py reminders                   # 生效中的提醒（--sta
 ```bash
 python scripts/fetch.py asr-files --date 2026-08-19            # 当天转写文件 + 对应 event_ids + 余量（不扣额度）
 python scripts/fetch.py asr-files --from 2026-08-01 --to 2026-08-07   # 区间最多 31 天
-python scripts/fetch.py asr-export --filename segments/2026/08/19/01K….txt   # 导出单个文件
+python scripts/fetch.py asr-export --filename F1 F2 F3        # 批量导出（一次传多个文件名，别一个个调）
 python scripts/fetch.py asr-export --date 2026-08-19           # 导出当天全部文件（已缓存的不再请求）
 ```
 
 - 文件名从两处来：`daily-detail` 响应的 `transcript_file`（某条日常的来源原文），或 `asr-files`
   按天列表（`files[].event_ids` 是该文件切出的日常事件）
+- **一次命令拿齐**：要多个文件就把文件名一次全传给 `--filename`（或直接 `--date`），脚本按 50 个
+  一批向服务器批量导出，不要循环逐个调用
 - **导出结果永久缓存在本地** `~/.withecho/asr/<openid>/<filename>`，`asr-export` 先查本地、
   没有才请求服务器；`asr-files` 的 `cached` 字段标出哪些已在本地。缓存命中不扣额度，
   所以同一文件反复分析没有成本，**不要绕过脚本直接调接口**
+- 输出 `files[]` 与入参同序：每项 `source=local|server` + `content`，或 `error=not_found|quota_exceeded`
+  （余量不够时按顺序能给多少给多少，给不到的标 `quota_exceeded`，已拿到的照常返回）
 - 每导出一个未缓存的文件扣会员月配额 1 次（pro 1000 / max 3000 / ultra 18000，免费会员不开放），
   响应 `quota` 有 `limit/used/remaining/period_end`。批量导出前先看 `asr-files` 的余量，
   未缓存文件数接近余量时提醒用户再动手；用户没要求就不要整月扫
